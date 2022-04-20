@@ -128,6 +128,15 @@ def symptom_net_parameter_learning(X, disorder="anxiety", count=5):
 # Helper Functions for Inference
 # ============================================================    
 
+def make_masked_matrix_for_prediction(X, target, n_evidence):
+    num_nodes = X.shape[1]
+    remaining = list(np.arange(num_nodes))
+    remaining.remove(target)
+    mask_nodes = np.random.permutation(remaining)[:n_evidence]
+    mask_nodes = np.append(mask_nodes, target)
+    X_test, y_test = mask_samples(X, mask_nodes, del_var_column=False)
+    return X_test
+
 def mask_samples(X, var_masked, del_var_column=True):
     y = X[:, var_masked]
     if del_var_column:  
@@ -138,76 +147,12 @@ def mask_samples(X, var_masked, del_var_column=True):
         X_masked[:, var_masked] = np.nan
     return X_masked, y
 
-
-def inference_single_missing_var(method):
-    X_true =  np.loadtxt("data/X.csv")
-    num_nodes = X_true.shape[1]
-    accuracy = np.zeros(num_nodes)
-    if method in ["BayesNet_notears", "BayesNet_chowliu"]:
-        for i in range(num_nodes):
-            var_masked = [i]
-            X = copy.deepcopy(X_true)
-            X_train, X_test, y_train, y_test = train_test_split(X, X, test_size=0.2)
-            if method == "BayesNet_notears":
-                BayesNet = symptom_net_parameter_learning(X_train)
-            elif method == "BayesNet_chowliu":
-                BayesNet = BayesianNetwork.from_samples(X_train, algorithm="chow-liu", pseudocount=5, name="Anxiety Symptom Network")
-            X_test, y_test = mask_samples(X_test, var_masked, del_var_column=False)
-            y_test_hat = np.array(BayesNet.predict(X_test))
-            accuracy[i] = np.mean(y_test_hat[:,i] == y_test)
-
-    elif method == "NaiveBayes":   
-        for i in range(num_nodes):
-            var_masked = [i]
-            X, y = mask_samples(X_true, var_masked)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-            y_train, y_test = np.squeeze(y_train), np.squeeze(y_test)
-            clf = BernoulliNB(fit_prior=True)
-            clf.fit(X_train, y_train)
-            accuracy[i] = clf.score(X_test, y_test)
- 
-    elif method == "LogisticRegression":
-        for i in range(num_nodes):
-            var_masked = [i]
-            X, y = mask_samples(X_true, var_masked)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-            y_train, y_test = np.squeeze(y_train), np.squeeze(y_test)
-            clf = LogisticRegression(random_state=0).fit(X_train, y_train)
-            accuracy[i] = clf.score(X_test, y_test)
-    
-    elif method == "MLP":
-        for i in range(num_nodes):
-            var_masked = [i]
-            X, y = mask_samples(X_true, var_masked)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-            y_train, y_test = np.squeeze(y_train), np.squeeze(y_test)
-            clf = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(64, 1), max_iter=500, random_state=1)
-            clf.fit(X_train, y_train)
-            accuracy[i] = clf.score(X_test, y_test)
-        
-    elif method == "NeuralNet":
-        for i in range(num_nodes):
-            var_masked = [i]
-            X, y = mask_samples(X_true, var_masked)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-            model = tf.keras.Sequential([
-                    tf.keras.layers.Dense(11),
-                    tf.keras.layers.Dense(128, activation='relu'),
-                    tf.keras.layers.Dense(128, activation='relu'),
-                    tf.keras.layers.Dense(1, activation="softmax")]) 
-            model.compile(optimizer='adam', loss=tf.losses.BinaryCrossentropy(from_logits=True), metrics=['accuracy']) 
-            model.fit(X_train, y_train, verbose=0)
-            model.evaluate(X_test, y_test)
-    
-    return accuracy    
- 
 def remove_figure_border(ax):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(True)
     ax.spines['left'].set_visible(True) 
 
- 
 def plot_prediction_accuracy(accuracy, all_methods):
     node_names = ["worry", "restless", "fatigue", "irritable", "distract", "tense", 
              "sleep", "heart", "sweat", "tremble", "dryMouth", "sad"]
@@ -225,8 +170,6 @@ def plot_prediction_accuracy(accuracy, all_methods):
     axs.set_ylabel("Prediction accuracy", fontsize=14)
     plt.show()
          
-
-
 def calculate_log_probability():
     X = np.loadtxt("data/X.csv")
     BayesNet = symptom_net_parameter_learning(X)
@@ -235,3 +178,27 @@ def calculate_log_probability():
     return logp, p
     
     
+
+def plot_acc_single_evidence():
+    acc = np.load("data/121_accuracy.npy")
+    anx_freqs = pd.read_csv('NCSR/anx_freqs.csv').to_numpy()
+    anx_SOI_idx = anx_freqs[2,1:]<0.8
+    freqs = copy.deepcopy(anx_freqs[:2, 1:])
+    freqs = freqs[:, anx_SOI_idx]
+    freqs_sum = np.sum(freqs, axis=0)
+    freqs = freqs / freqs_sum
+    max_likely_freq = np.array([np.max(freqs, axis=0) for i in range(acc.shape[0])])
+    np.fill_diagonal(max_likely_freq, 0)
+    marg_acc = acc[:,:,0] - max_likely_freq
+    print(marg_acc)
+    
+    fig, ax = plt.subplots()
+    im = ax.imshow(marg_acc)
+    fig.colorbar(im, ax=ax)
+    ax.set_xticks(np.arange(acc.shape[0]))
+    ax.set_yticks(np.arange(acc.shape[0]))
+    ax.set_xticklabels(load_node_names())
+    ax.set_yticklabels(load_node_names())
+    ax.set_xlabel("Target")
+    ax.set_ylabel("Evidence")
+    plt.show()
