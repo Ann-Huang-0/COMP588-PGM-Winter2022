@@ -6,19 +6,21 @@ from pgmpy.estimators import MaximumLikelihoodEstimator, BayesianEstimator
 from pgmpy.inference import BeliefPropagation
 from helper import *
 from notears.linear import *
+from linclab_utils import plot_utils
+plot_utils.linclab_plt_defaults()
 
 # controller
-structure_learning = "HillClimbing"
+structure_learning = "NoTears"
 
 # split train and test data
 X = np.loadtxt("data/X.csv")
-train_ratio = 0.97
+train_ratio = 0.99
 n = X.shape[0]
 num_nodes = X.shape[1]
 idx_shuffle = np.random.permutation(n)
 X_train = X[idx_shuffle[:int(n*train_ratio)], :]
 X_test = X[idx_shuffle[int(n*train_ratio):], :]
-'''
+
 node_names = load_node_names()
 data_train = pd.DataFrame(X_train, columns=node_names)
 
@@ -36,13 +38,25 @@ print("Structure learning finished.")
 # parameter learning via Bayesian Estimation
 model.fit(data=data_train, estimator=BayesianEstimator, prior_type="BDeu")
 print("Parameter learning finished.")
-'''
+
 # MAP inference
-#bp = BeliefPropagation(model)
-#MAP_inference_11_evidence(bp, X_train)
-inference_discriminative(X)
-        
+bp = BeliefPropagation(model)
+MAP_inference_1_evidence(bp, X_test)
 
-# predict the probability
+# plot discriminative accuracy
+#inference_discriminative(X, method="HillClimbing")
+#accuracy = np.load("data/discrim_accuracy.npy")
+#plot_prediction_accuracy(accuracy, ["BayesianNetwork", "NaiveBayes", "LogisticReg", "MLP"])
 
+'''
+accuracy = np.load("data_pgmpy/MAP_1_evi.npy")
+plt.imshow(accuracy[:,:,0])
+plt.show()
 
+A = np.loadtxt("data/dag.csv", delimiter=",")
+plt.imshow(A)
+plt.show()
+
+MAP_inference_increasing_evidence(bp, X_test, n_trial=5)
+plot_log_prob([1,5,10])
+'''

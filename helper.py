@@ -10,6 +10,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import BernoulliNB
 from pgmpy.models import BayesianModel
 from pgmpy.estimators import MaximumLikelihoodEstimator, BayesianEstimator
+from pgmpy.estimators import HillClimbSearch, BicScore
+from pgmpy.estimators import MaximumLikelihoodEstimator, BayesianEstimator
 from pgmpy.inference import BeliefPropagation
 import tensorflow as tf
 from notears.linear import notears_linear
@@ -81,7 +83,7 @@ def get_node_size(disorder='anxiety', gain=20000):
    
 def load_node_names():
     return ["worry", "restless", "fatigue", "irritable", "distract", "tense", 
-             "sleep", "heart", "sweat", "tremble", "dryMouth", "sad"]
+             "sleep", "heart", "sweat", "tremble", "dryMth", "sad"]
         
 def get_node_name(disorder='anxiety'):
     if disorder == 'anxiety':
@@ -161,19 +163,20 @@ def remove_figure_border(ax):
 
 def plot_prediction_accuracy(accuracy, all_methods):
     node_names = ["worry", "restless", "fatigue", "irritable", "distract", "tense", 
-             "sleep", "heart", "sweat", "tremble", "dryMouth", "sad"]
+             "sleep", "heart", "sweat", "tremble", "dryMth", "sad"]
     X = np.arange(len(node_names))
+    n_repeat = accuracy.shape[-1]
     fig, axs = plt.subplots()
     for i, method in enumerate(all_methods):
-        axs.plot(X, np.mean(accuracy[i,:,:], axis=1), label=method, linewidth=1.5)
-        axs.fill_between(X, np.mean(accuracy[i,:,:], axis=1)+np.std(accuracy[i,:,:], axis=1), 
-                         np.mean(accuracy[i,:,:], axis=1)-np.std(accuracy[i,:,:], axis=1), alpha=0.25)
+        axs.plot(X, np.mean(accuracy[i,:,:], axis=1), label=method)
+        axs.fill_between(X, np.mean(accuracy[i,:,:], axis=1)+np.std(accuracy[i,:,:]/np.sqrt(n_repeat), axis=1), 
+                         np.mean(accuracy[i,:,:], axis=1)-np.std(accuracy[i,:,:], axis=1)/np.sqrt(n_repeat), alpha=0.25)
     remove_figure_border(axs)
-    axs.legend(frameon= False, fontsize=12)
+    axs.legend(frameon= False)
     axs.set_xticks(np.arange(len(node_names)))
-    axs.set_xticklabels(node_names, fontsize=10)
-    axs.set_xlabel("Symptom", fontsize=14)
-    axs.set_ylabel("Prediction accuracy", fontsize=14)
+    axs.set_xticklabels(node_names, fontsize=13.5)
+    axs.set_xlabel("Symptom")
+    axs.set_ylabel("Prediction accuracy")
     plt.show()
          
 def calculate_log_probability():
@@ -251,10 +254,11 @@ def convert_adj_to_edge_list(A=[]):
     return [(node_names[edge[0]], node_names[edge[1]]) for edge in edgelist]
 
 
-def MAP_inference_1_evidence(bp, data, n_repeat=5):
+def MAP_inference_1_evidence(bp, data, n_repeat=1):
     n, num_nodes = data.shape
     node_names = load_node_names()
     accuracy = np.zeros((num_nodes, num_nodes, n_repeat)) 
+    prob = np.zeros((num_nodes, num_nodes, n_repeat, n)) 
     for rep in range(n_repeat):
         for evi in range(num_nodes):
             pred = np.zeros((n, num_nodes-1))
@@ -266,16 +270,21 @@ def MAP_inference_1_evidence(bp, data, n_repeat=5):
                 # create a dictionary representing the evidence
                 evidence = {node_names[evi]: data[i, evi]}
                 map_pred = bp.map_query(variables=target, evidence=evidence, show_progress=False)
+                for j in range(len(target_idx)):
+                    prob_pred = bp.query(variables=[node_names[target_idx[j]]], evidence=evidence, show_progress=False)
+                    prob_pred = prob_pred.values
+                    prob[evi, target_idx[j], rep, i] = prob_pred[int(data[i,target_idx[j]])]
+                print(prob[evi, target_idx[j], rep, i])
                 pred[i, :] = np.array(list(map_pred.values()))
             accuracy[evi, target_idx, rep] = np.mean(data[:, target_idx] == pred, axis=0)
             print(accuracy[evi, target_idx, rep])
-    np.save("data_pgmpy/MAP_1_evi", accuracy)         
+            np.save("data_pgmpy/MAP_prob", prob)         
                 
                 
 def MAP_inference_11_evidence(bp, data, n_repeat=5):
     n, num_nodes = data.shape
     node_names = load_node_names()
-    accuracy = np.zeros((num_nodes, n_repeat)) 
+    accuracy = np.zeros((num_nodes, num_nodes, n_repeat)) 
     for rep in range(n_repeat):
         for target in range(num_nodes):
             pred = np.zeros(n)
@@ -292,8 +301,8 @@ def MAP_inference_11_evidence(bp, data, n_repeat=5):
     np.save("data_pgmpy/MAP_11_evi", accuracy)       
     
  
-def inference_discriminative(X, n_repeat=5):
-    train_ratio = 0.95
+def inference_discriminative(X, method="NoTears", n_repeat=5):
+    train_ratio = 0.97
     n = X.shape[0]
     num_nodes = X.shape[1]
     node_names = load_node_names()
@@ -311,8 +320,8 @@ def inference_discriminative(X, n_repeat=5):
             X_pos = np.vstack((X_pos, X_neg[-1,:]))
             X_neg = np.vstack((X_neg, X_pos[0,:]))
             # train two seperate Bayesian network
-            bp_pos = create_bp_object(X_pos)
-            bp_neg = create_bp_object(X_neg)
+            bp_pos = create_bp_object(X_pos, method=method)
+            bp_neg = create_bp_object(X_neg, method=method)
             # inference
             for i in range(X_test.shape[0]):
                 evidence = {}
@@ -326,14 +335,81 @@ def inference_discriminative(X, n_repeat=5):
                 X_test_pred[i] = prob_pos > prob_neg
             accuracy[rep,target] = np.maximum([1-np.mean(X_test_pred)], [np.mean(X_test_pred)])
             print("Predicting symptom", node_names[target], ":", accuracy[rep, target])
-    np.save("data_pgmpy/discr", accuracy)
+            np.save("data_pgmpy/discr2", accuracy)
                           
             
-def create_bp_object(X):
-    dag = notears_linear(X, lambda1=0.01, loss_type="logistic")
-    edges = convert_adj_to_edge_list(dag)
+def create_bp_object(X, method="NoTears"):
+    if method == "NoTears":
+        dag = notears_linear(X, lambda1=0.01, loss_type="logistic")
+        edges = convert_adj_to_edge_list(dag)
+        model = BayesianModel(edges)
+        X = pd.DataFrame(X, columns=load_node_names())
+    elif method == "HillClimbing":
+        X = pd.DataFrame(X, columns=load_node_names())
+        est = HillClimbSearch(X)
+        model = est.estimate(scoring_method=BicScore(X))
+        edges = model.edges()
     model = BayesianModel(edges)
-    X = pd.DataFrame(X, columns=load_node_names())
     model.fit(data=X, estimator=BayesianEstimator, prior_type="BDeu")
     bp = BeliefPropagation(model)
     return bp
+
+
+def MAP_inference_increasing_evidence(bp, X_test, n_trial=10):
+    n_evidence = [1,5,10]
+    node_names = load_node_names()
+    n, num_nodes = X_test.shape
+    accuracy = np.zeros((len(n_evidence), num_nodes, n_trial))
+    probability = np.zeros((len(n_evidence), num_nodes, n_trial, n))
+    for idx_evi, n_evi in enumerate(n_evidence):
+        # predicting a particular target symptom
+        for target in range(num_nodes):
+            # using a particular combination of evidence
+            for trial in range(n_trial):
+                pred = np.zeros(n)
+                pred_prob = np.zeros(n)
+                symptom_idx_shuff = list(np.arange(num_nodes))
+                symptom_idx_shuff.remove(target)
+                evi = np.random.permutation(symptom_idx_shuff)[:n_evi]
+                for subject in range(n):
+                    # construct a dictionary of evidence
+                    evidence = {}
+                    for evi_node_idx in evi:
+                        evidence[node_names[evi_node_idx]] = X_test[subject,evi_node_idx]
+                    # inference
+                    map_pred = bp.map_query(variables=[node_names[target]], evidence=evidence, show_progress=False)
+                    prob_pred = bp.query(variables=[node_names[target]], evidence=evidence, show_progress=False)
+                    prob_pred = list(prob_pred.values)
+                    probability[idx_evi, target, trial, subject] = prob_pred[int(X_test[subject,target])]
+                    pred[subject] = np.array(list(map_pred.values()))
+                accuracy[idx_evi, target, trial] = np.mean(pred == X_test[:,target])
+                print("Num evi:", n_evi, "; Target symptom:", node_names[target], "; Trial", trial, "; Accuracy: ", accuracy[idx_evi, target, trial])
+                np.save("data_pgmpy/evidence.npy", accuracy)
+                np.save("data_pgmpy/prob.npy", probability)
+            
+                    
+def plot_log_prob(n_evidence):
+    prob = np.load("data_pgmpy/prob.npy")
+    avgprob = np.mean(np.mean(prob, axis=-1), axis=-1)
+    #avgprob = np.log(avgprob)
+    seprob = np.std(np.mean(prob, axis=-1), axis=-1) / np.sqrt(10)
+    node_names = load_node_names()
+    X = np.arange(len(node_names))
+    fig, ax = plt.subplots()
+    for i in range(len(n_evidence)):
+        ax.plot(X, avgprob[i,:], label="Num evi = "+str(n_evidence[i]))
+        ax.fill_between(X, avgprob[i,:]+seprob[i,:], avgprob[i,:]-seprob[i,:], alpha=0.2)
+    ax.legend(frameon=False)
+    ax.set_xlabel("Symptom")
+    ax.set_ylabel("Average predicted prob")
+    ax.set_xticks(X)
+    ax.set_xticklabels(node_names, fontsize=14)
+    plt.show()             
+                            
+                
+               
+                
+        
+    
+    
+    
